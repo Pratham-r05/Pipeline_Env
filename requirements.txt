@@ -1,0 +1,7 @@
+openenv-core
+fastapi
+uvicorn[standard]
+pydantic
+openai
+requests
+huggingface_hub

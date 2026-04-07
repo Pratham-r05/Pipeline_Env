@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "pipeline-env"
+version = "1.0.0"
+description = "RL environment for training agents to diagnose and repair broken CI/CD pipelines"
+requires-python = ">=3.10"
+dependencies = [
+    "openenv-core",
+    "fastapi",
+    "uvicorn",
+    "pydantic",
+    "openai",
+    "requests",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
