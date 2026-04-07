@@ -233,16 +233,9 @@ def run_agent(task_id: str):
 
 
 # ── BUILD GRADIO UI ────────────────────────────────────────────────────────────
-with gr.Blocks(
-    css=CSS,
-    title="PipelineEnv — Agent Dashboard",
-    theme=gr.themes.Base(
-        primary_hue="blue",
-        neutral_hue="slate",
-        font=[gr.themes.GoogleFont("JetBrains Mono"), "monospace"],
-    )
-) as demo:
-
+with gr.Blocks(title="PipelineEnv — Agent Dashboard") as demo:
+    gr.HTML(f"<style>{CSS}</style>")
+    
     gr.HTML("""
     <div style="text-align:center;padding:24px 0 8px">
         <div style="font-size:28px;font-weight:700;letter-spacing:-1px">🔧 PipelineEnv</div>
