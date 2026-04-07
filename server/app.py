@@ -1,6 +1,6 @@
 # server/app.py — FastAPI server with all required endpoints
-import gradio as gr
-from ui import demo
+import os
+import uvicorn
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
@@ -8,6 +8,11 @@ from pydantic import BaseModel
 from typing import Optional
 from server.pipeline_environment import PipelineEnvironment
 from models import PipelineAction, RepairAction
+
+# ── Only build the Gradio UI if running on HF Spaces ───
+if os.getenv("SPACE_ID"):
+    import gradio as gr
+    from ui import demo as gradio_demo
 
 app = FastAPI(title="PipelineEnv", version="1.0.0")
 
@@ -62,4 +67,16 @@ def step(req: StepRequest):
 def state():
     return env.state.model_dump()
 
-app = gr.mount_gradio_app(app, demo, path="/ui")
+
+# ─── GRADIO MOUNT (only on HF Spaces) ──────────────────
+if os.getenv("SPACE_ID"):
+    from ui import demo as _demo
+    app = gr.mount_gradio_app(app, _demo, path="/ui")
+
+
+def main():
+    uvicorn.run(app, host="0.0.0.0", port=7860)
+
+
+if __name__ == "__main__":
+    main()

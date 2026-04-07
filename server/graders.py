@@ -7,6 +7,11 @@ STAGE_WEIGHTS = {
 }
 
 
+ACTION_ORDER = {
+    "hard": ["rollback_commit", "add_dependency", "fix_yaml_config"],
+}
+
+
 def compute_health_score(stages: list) -> float:
     """
     Deterministic grader — same pipeline state always → same score.
@@ -31,12 +36,28 @@ def compute_health_score(stages: list) -> float:
     return round(passing_weight / total_weight, 3)
 
 
-def grade_task(task_id: str, final_health: float) -> float:
+def _check_action_order(required: list, taken: list) -> bool:
+    """
+    Check that required actions were taken in the correct order.
+    Ignores unrelated actions (no_op, retry, etc.) in the history.
+    """
+    relevant = [a for a in taken if a in required]
+    return relevant == required
+
+
+def grade_task(task_id: str, final_health: float, action_history: list = None) -> float:
     """
     Final grader for each task.
     Returns score in [0.0, 1.0].
     Full score only if pipeline fully healed.
+    For "hard" task, actions must be in correct order.
     """
+    action_history = action_history or []
+
     if final_health >= 0.99:
+        # For hard task, also verify action ordering
+        order = ACTION_ORDER.get(task_id)
+        if order and not _check_action_order(order, action_history):
+            return round(final_health * 0.7, 3)  # penalty for wrong order
         return 1.0
     return round(final_health, 3)

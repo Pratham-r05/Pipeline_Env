@@ -1,91 +1,69 @@
 # ui.py — Visual agent dashboard for PipelineEnv
-# Add this file to your HuggingFace Space root.
-# It mounts a Gradio app at /ui on top of your existing FastAPI server.
+# Mounts a Gradio app at /ui on top of the FastAPI server.
+# Runs fully local — talks directly to the in-process PipelineEnvironment.
 
-import os
 import json
+import os
 import time
-import requests
 import gradio as gr
 from openai import OpenAI
 
-BASE_URL = os.getenv("BASE_URL", "https://endraode-pipeline-env.hf.space")
-API_BASE    = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
-MODEL_NAME  = os.getenv("MODEL_NAME", "meta-llama/Llama-3.1-8B-Instruct")
-HF_TOKEN    = os.getenv("HF_TOKEN", "dummy")
+from server.pipeline_environment import PipelineEnvironment
+from models import PipelineAction, RepairAction
 
-STAGE_ICONS = {"passing": "✅", "failing": "❌", "skipped": "⏭️"}
+# ── Config ─────────────────────────────────────────────
+API_BASE_URL = os.getenv("API_BASE_URL") or "https://router.huggingface.co/v1"
+MODEL_NAME   = os.getenv("MODEL_NAME") or "meta-llama/Llama-3.1-8B-Instruct"
+API_KEY      = os.getenv("HF_TOKEN") or os.getenv("API_KEY") or "dummy"
+
+env = PipelineEnvironment()
+
 ACTION_ICONS = {
-    "fix_test": "🧪", "set_env_var": "🔑", "fix_docker_config": "🐳",
-    "fix_yaml_config": "📄", "retry_stage": "🔄", "rollback_commit": "⏪",
-    "add_dependency": "📦", "no_op": "💤",
+    "fix_test": "\U0001f9ea",
+    "set_env_var": "\U0001f511",
+    "fix_docker_config": "\U0001f40b",
+    "fix_yaml_config": "\U0001f4c4",
+    "retry_stage": "\U0001f504",
+    "rollback_commit": "\u23ea",
+    "add_dependency": "\U0001f4e6",
+    "no_op": "\U0001f4a4",
 }
 
-TASK_DESCRIPTIONS = {
-    "easy":   "🟢 Easy — Fix a single failing unit test",
-    "medium": "🟡 Medium — Fix broken Docker config + missing env var",
-    "hard":   "🔴 Hard — Fix cascading 3-stage failure in correct order",
-}
+# ── Helpers ────────────────────────────────────────────
 
-CSS = """
-body { font-family: 'JetBrains Mono', 'Fira Code', monospace !important; }
-.pipeline-card {
-    background: #0d1117;
-    border: 1px solid #30363d;
-    border-radius: 8px;
-    padding: 16px;
-    margin: 8px 0;
-    font-family: monospace;
-}
-.health-bar-wrap { background: #21262d; border-radius: 4px; height: 20px; margin: 8px 0; }
-.health-bar { height: 20px; border-radius: 4px; transition: width 0.5s ease; }
-.stage-row { display: flex; gap: 12px; align-items: center; padding: 6px 0; border-bottom: 1px solid #21262d; }
-.step-log { font-size: 12px; color: #8b949e; }
-.action-taken { font-size: 14px; font-weight: bold; color: #58a6ff; }
-.reward-positive { color: #3fb950; }
-.reward-negative { color: #f85149; }
-"""
+def _render_env(obs, step, max_s):
+    lines = []
+    name = obs.get("pipeline_name", "pipeline")
+    lines.append(
+        f'<div style="color:#58a6ff;font-weight:700;margin-bottom:6px">'
+        f'\U0001f4e6 Pipeline: {name} &nbsp;|&nbsp; Step {step}/{max_s}</div>'
+    )
+    for s in obs.get("stages", []):
+        icon = {"passing": "\u2705", "failing": "\u274c", "skipped": "\u23ed\ufe0f"}.get(s["status"], "?")
+        err = f' <span style="color:#f85149;font-size:11px">({s["error"]})</span>' if s.get("error") else ""
+        lines.append(f'<span style="color:#cdd9e5">{icon} {s["name"]:<10} {s["status"]:<10}</span>{err}')
+    return "<br>".join(lines)
 
-def health_color(score: float) -> str:
-    if score >= 0.8: return "#3fb950"
-    if score >= 0.4: return "#d29922"
-    return "#f85149"
 
-def render_stages(stages: list) -> str:
-    rows = ""
-    for s in stages:
-        icon = STAGE_ICONS.get(s["status"], "❓")
-        err  = f'<span style="color:#f85149;font-size:11px"> — {s["error"]}</span>' if s.get("error") else ""
-        rows += f'<div class="stage-row"><b style="color:#cdd9e5;width:70px">{s["name"]}</b> {icon} <span style="color:#8b949e">{s["status"]}</span>{err}</div>'
-    return rows
+def _render_health(score):
+    pct = int(score * 100)
+    color = "#3fb950" if score >= 0.8 else "#d29922" if score >= 0.4 else "#f85149"
+    return (
+        f'<div style="height:12px;background:#21262d;border-radius:4px;margin:4px 0">'
+        f'<div style="height:12px;width:{pct}%;background:{color};border-radius:4px;transition:width .3s"></div></div>'
+        f'<div style="font-size:12px;color:#8b949e;text-align:right">Health: {score:.2f} / 1.0 ({pct}%)</div>'
+    )
 
-def render_health_bar(score: float) -> str:
-    pct   = int(score * 100)
-    color = health_color(score)
-    return f"""
-    <div class="health-bar-wrap">
-        <div class="health-bar" style="width:{pct}%;background:{color}"></div>
-    </div>
-    <div style="text-align:right;font-size:12px;color:#8b949e">Health: {score:.2f} / 1.0 ({pct}%)</div>
-    """
 
-def get_agent_action(client, obs: dict) -> dict:
-    errors    = obs.get("error_messages", [])
-    actions   = obs.get("available_actions", [])
-    health    = obs.get("health_score", 0)
-    task_desc = obs.get("task_description", "")
-
+def _agent_action(client, obs):
     prompt = f"""You are a DevOps engineer fixing a broken CI/CD pipeline.
 
-Task: {task_desc}
-Current pipeline health: {health:.2f}/1.0
-Errors: {errors}
-Available repair actions: {actions}
+Task: {obs.get("task_description", "")}
+Health: {obs.get("health_score", 0):.2f}/1.0
+Errors: {obs.get("error_messages", [])}
+Available: {obs.get("available_actions", [])}
 
-Respond with ONLY a JSON object like:
-{{"action": "fix_test", "target": null, "value": null}}
-
-Choose the single best action to fix the pipeline."""
+Reply JSON ONLY: {{"action":"fix_test","target":null,"value":null}}"""
 
     try:
         resp = client.chat.completions.create(
@@ -97,193 +75,122 @@ Choose the single best action to fix the pipeline."""
         content = resp.choices[0].message.content.strip()
         content = content.replace("```json", "").replace("```", "").strip()
         return json.loads(content)
-    except Exception as e:
+    except Exception:
         return {"action": "no_op", "target": None, "value": None}
 
 
-def run_agent(task_id: str):
-    """
-    Generator — yields (pipeline_html, health_html, log_html, summary_html) at each step.
-    """
-    client = OpenAI(base_url=API_BASE, api_key=HF_TOKEN)
-    log_lines = []
+# ── Yielding generator ──────────────────────────────────
 
-    def add_log(line, color="#cdd9e5"):
-        log_lines.append(f'<div style="color:{color};font-size:12px;padding:2px 0">{line}</div>')
+def run_task(task_id):
+    client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+    obs = env.reset(task_id).model_dump()
+    max_s = obs["max_steps"]
 
-    # ── RESET ──────────────────────────────────────────────────
-    try:
-        r = requests.post(f"{BASE_URL}/reset", json={"task_id": task_id}, timeout=15)
-        r.raise_for_status()
-        obs = r.json()
-    except Exception as e:
-        yield (
-            f'<div style="color:#f85149">❌ Failed to connect to environment: {e}</div>',
-            "", "", ""
-        )
-        return
+    term_lines = []
+    action_log = []
+    rewards = []
+    success = False
+    current_score = 0.0
 
-    max_steps = obs.get("max_steps", 12)
-    add_log(f"🚀 Episode started | task={task_id} | max_steps={max_steps}", "#58a6ff")
+    # reset banner
+    term_lines.append("\U0001f680 RESET  \u2014 starting episode")
+    term_lines.append(f"    Task  : {task_id}")
+    term_lines.append(f"    Desc  : {obs['task_description']}")
+    term_lines.append(f"    Steps : {max_s}")
+    term_lines.append(f"    Health: {obs['health_score']:.2f}")
 
-    pipeline_html = f"""
-    <div class="pipeline-card">
-        <div style="color:#58a6ff;font-size:13px;margin-bottom:8px">📋 {obs.get('pipeline_name','pipeline')} — {TASK_DESCRIPTIONS.get(task_id,'')}</div>
-        {render_stages(obs.get('stages', []))}
-    </div>"""
+    def _snapshot():
+        te = "<br>".join(term_lines)
+        term_box = f'<div style="font-family:JetBrains Mono,Fira Code,monospace;font-size:13px;line-height:1.6;color:#c9d1d9;background:#0d1117;padding:12px;border-radius:6px;white-space:pre-wrap;max-height:340px;overflow-y:auto">{te}</div>'
+        al = "<br>".join(f'<span style="color:#58a6ff;font-family:monospace;font-size:12px">{a}</span>' for a in action_log) if action_log else '<span style="color:#8b949e;font-size:12px">Waiting\u2026</span>'
+        sm = f'<span style="color:#8b949e;font-size:12px">Running\u2026 step {len(term_lines)}/{max_s} | health {obs["health_score"]:.2f} | score {current_score:.3f}</span>'
+        return _render_env(obs, len(action_log), max_s), _render_health(obs["health_score"]), term_box, al, sm
 
-    health_html = render_health_bar(obs.get("health_score", 0))
-    log_html    = "".join(log_lines)
-    summary_html = '<div style="color:#8b949e">Agent running...</div>'
+    yield _snapshot()
+    time.sleep(0.4)
 
-    yield pipeline_html, health_html, log_html, summary_html
-
-    rewards     = []
-    steps_taken = 0
-    success     = False
-
-    # ── STEP LOOP ──────────────────────────────────────────────
-    for step in range(1, max_steps + 1):
-        action_dict = get_agent_action(client, obs)
-        action_name = action_dict.get("action", "no_op")
-        action_icon = ACTION_ICONS.get(action_name, "⚙️")
-
-        add_log(f"── Step {step} ──────────────────────", "#30363d")
-        add_log(f"{action_icon} Agent chose: <b style='color:#58a6ff'>{action_name}</b>")
+    for step_num in range(1, max_s + 1):
+        ad = _agent_action(client, obs)
+        aname = ad.get("action", "no_op")
+        icon = ACTION_ICONS.get(aname, "\u2699")
+        action_log.append(f"{icon} Step {step_num}: {aname}")
+        term_lines.append(f'    \u279c Action \u279c {aname}')
 
         try:
-            sr     = requests.post(f"{BASE_URL}/step", json=action_dict, timeout=15)
-            result = sr.json()
-        except Exception as e:
-            add_log(f"❌ Step failed: {e}", "#f85149")
-            break
+            ra = getattr(RepairAction, aname)
+        except Exception:
+            ra = RepairAction.no_op
+        result = env.step(PipelineAction(action=ra, target=ad.get("target"), value=ad.get("value")))
+        rwd = result.get("reward", 0) or 0.0
+        done = result.get("done", False)
+        obs = result.get("observation", obs)
+        info = result.get("info", {})
+        current_score = info.get("grader_score", current_score)
+        rewards.append(rwd)
 
-        reward  = result.get("reward") or 0.0
-        done    = result.get("done", False)
-        obs     = result.get("observation", obs)
-        err     = result.get("info", {}).get("error")
-        health  = obs.get("health_score", 0)
+        if rwd > 0:
+            term_lines.append(f'<span style="color:#3fb950">      reward {rwd:+.3f}   health \u2192 {obs["health_score"]:.2f}</span>')
+        elif rwd < 0:
+            term_lines.append(f'<span style="color:#f85149">      reward {rwd:+.3f}   health \u2192 {obs["health_score"]:.2f}</span>')
+        else:
+            term_lines.append(f'      reward {rwd:+.3f}   health \u2192 {obs["health_score"]:.2f}')
 
-        rewards.append(reward)
-        steps_taken = step
-
-        r_color = "#3fb950" if reward > 0 else "#f85149" if reward < 0 else "#8b949e"
-        add_log(f"   Reward: <span style='color:{r_color}'>{reward:+.3f}</span>  |  Health: {health:.2f}")
-        if err:
-            add_log(f"   ⚠️ {err}", "#d29922")
-
-        pipeline_html = f"""
-        <div class="pipeline-card">
-            <div style="color:#58a6ff;font-size:13px;margin-bottom:8px">📋 {obs.get('pipeline_name','pipeline')} — Step {step}/{max_steps}</div>
-            {render_stages(obs.get('stages', []))}
-        </div>"""
-
-        health_html  = render_health_bar(health)
-        log_html     = "".join(log_lines)
-        summary_html = '<div style="color:#8b949e">Agent running...</div>'
-
-        yield pipeline_html, health_html, log_html, summary_html
+        yield _snapshot()
         time.sleep(0.3)
 
         if done:
-            success = health >= 0.99
+            success = current_score >= 0.99
             break
 
-    # ── FINAL SUMMARY ─────────────────────────────────────────
-    total_reward = sum(rewards)
-    avg_reward   = total_reward / len(rewards) if rewards else 0
-    status_color = "#3fb950" if success else "#f85149"
-    status_text  = "✅ PIPELINE HEALED" if success else "❌ FAILED TO HEAL"
+    # --- final summary ---
+    total_r = sum(rewards)
+    avg_r = total_r / len(rewards) if rewards else 0
+    sc = "#3fb950" if success else "#f85149"
+    st = "\u2705 PIPELINE HEALED" if success else "\u274c FAILED TO HEAL"
+    term_lines.append(f'<span style="color:{sc};font-weight:700;font-size:14px">{st}</span>')
+    term_lines.append(f'    Steps: {len(action_log)} | Total reward: {total_r:+.3f} | Score: {current_score:.3f}')
+    term_lines.append(f'    Model: {MODEL_NAME.split("/")[-1]}')
 
-    summary_html = f"""
-    <div class="pipeline-card" style="border-color:{status_color}">
-        <div style="font-size:18px;color:{status_color};margin-bottom:12px">{status_text}</div>
-        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
-            <div>
-                <div style="color:#8b949e;font-size:11px">TASK</div>
-                <div style="color:#cdd9e5;font-size:16px">{task_id.upper()}</div>
-            </div>
-            <div>
-                <div style="color:#8b949e;font-size:11px">STEPS TAKEN</div>
-                <div style="color:#cdd9e5;font-size:16px">{steps_taken}</div>
-            </div>
-            <div>
-                <div style="color:#8b949e;font-size:11px">FINAL HEALTH</div>
-                <div style="color:{health_color(obs.get('health_score',0))};font-size:16px">{obs.get('health_score',0):.2f}</div>
-            </div>
-            <div>
-                <div style="color:#8b949e;font-size:11px">TOTAL REWARD</div>
-                <div style="color:{'#3fb950' if total_reward>0 else '#f85149'};font-size:16px">{total_reward:+.3f}</div>
-            </div>
-            <div>
-                <div style="color:#8b949e;font-size:11px">AVG REWARD/STEP</div>
-                <div style="color:#cdd9e5;font-size:16px">{avg_reward:+.3f}</div>
-            </div>
-            <div>
-                <div style="color:#8b949e;font-size:11px">MODEL</div>
-                <div style="color:#cdd9e5;font-size:12px">{MODEL_NAME.split('/')[-1]}</div>
-            </div>
-        </div>
-    </div>"""
-
-    add_log(f"{'✅ SUCCESS' if success else '❌ FAILED'} | steps={steps_taken} | total_reward={total_reward:+.3f}", status_color)
-    log_html = "".join(log_lines)
-
-    yield pipeline_html, render_health_bar(obs.get("health_score", 0)), log_html, summary_html
+    yield _snapshot()
 
 
-# ── BUILD GRADIO UI ────────────────────────────────────────────────────────────
-with gr.Blocks(title="PipelineEnv — Agent Dashboard") as demo:
-    gr.HTML(f"<style>{CSS}</style>")
+# ── Gradio layout ──────────────────────────────────────
 
-    gr.HTML("""
-    <div style="text-align:center;padding:24px 0 8px">
-        <div style="font-size:28px;font-weight:700;letter-spacing:-1px">🔧 PipelineEnv</div>
-        <div style="color:#8b949e;font-size:14px;margin-top:4px">RL Agent • CI/CD Self-Healing Dashboard</div>
-    </div>
-    """)
+with gr.Blocks(title="PipelineEnv \u2014 Agent Dashboard") as demo:
+    gr.HTML('<style>body{font-family:JetBrains Mono,Fira Code,monospace !important;}</style>')
 
-    with gr.Row():
-        task_dropdown = gr.Dropdown(
-            choices=["easy", "medium", "hard"],
-            value="easy",
-            label="Select Task",
-            scale=2,
-        )
-        run_btn = gr.Button("▶  Run Agent", variant="primary", scale=1)
-
-    with gr.Row():
-        with gr.Column(scale=1):
-            gr.HTML("<div style='color:#8b949e;font-size:12px;margin-bottom:4px'>PIPELINE STAGES</div>")
-            pipeline_display = gr.HTML('<div style="color:#8b949e">Select a task and click Run Agent.</div>')
-
-            gr.HTML("<div style='color:#8b949e;font-size:12px;margin:12px 0 4px'>HEALTH SCORE</div>")
-            health_display = gr.HTML("")
-
-        with gr.Column(scale=1):
-            gr.HTML("<div style='color:#8b949e;font-size:12px;margin-bottom:4px'>STEP LOG</div>")
-            log_display = gr.HTML(
-                '<div style="color:#8b949e;font-size:12px">Waiting for agent...</div>',
-                elem_id="log-box",
-            )
-
-    gr.HTML("<div style='color:#8b949e;font-size:12px;margin:12px 0 4px'>EPISODE SUMMARY</div>")
-    summary_display = gr.HTML("")
-
-    run_btn.click(
-        fn=run_agent,
-        inputs=[task_dropdown],
-        outputs=[pipeline_display, health_display, log_display, summary_display],
+    gr.HTML(
+        '<div style="text-align:center;padding:20px 0 8px">'
+        '<div style="font-size:28px;font-weight:700">\U0001f527 PipelineEnv</div>'
+        '<div style="color:#8b949e;font-size:14px;margin-top:4px">RL Agent \u2022 CI/CD Self-Healing Dashboard</div></div>'
     )
 
-# ── MOUNT ON FASTAPI ───────────────────────────────────────────────────────────
-# In your server/app.py, add these lines at the bottom:
-#
-#   from ui import demo
-#   import gradio as gr
-#   app = gr.mount_gradio_app(app, demo, path="/ui")
-#
-# Then visit:  https://endraode-pipeline-env.hf.space/ui
+    with gr.Row():
+        task_dd = gr.Dropdown(choices=["easy", "medium", "hard"], value="easy", label="Task")
+        run_btn = gr.Button("\u25b6  Run Agent", variant="primary")
+
+    with gr.Row():
+        with gr.Column(scale=1):
+            gr.HTML('<div style="color:#8b949e;font-size:12px;margin-bottom:4px">PIPELINE STAGES</div>')
+            pipeline_disp = gr.HTML('<div style="color:#8b949e">Select a task and click Run Agent.</div>')
+            gr.HTML('<div style="color:#8b949e;font-size:12px;margin:12px 0 4px">HEALTH</div>')
+            health_disp = gr.HTML("")
+
+        with gr.Column(scale=1):
+            gr.HTML('<div style="color:#8b949e;font-size:12px;margin-bottom:4px">ACTION LOG</div>')
+            action_disp = gr.HTML('<div style="color:#8b949e;font-size:12px">Waiting\u2026</div>')
+            gr.HTML('<div style="color:#8b949e;font-size:12px;margin:12px 0 4px">SUMMARY</div>')
+            summary_disp = gr.HTML("")
+
+    gr.HTML('<div style="color:#8b949e;font-size:12px;margin-bottom:4px">TERMINAL</div>')
+    terminal_disp = gr.HTML("")
+
+    run_btn.click(
+        fn=run_task,
+        inputs=[task_dd],
+        outputs=[pipeline_disp, health_disp, terminal_disp, action_disp, summary_disp],
+    )
+
 
 if __name__ == "__main__":
     demo.launch(server_port=7861)

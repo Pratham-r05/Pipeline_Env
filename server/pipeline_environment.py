@@ -19,6 +19,9 @@ class PipelineEnvironment(Environment):
         self.task_description = ""
         self.scenario_name    = "none"
         self.stages           = []
+        self.action_history   = []
+        self.required_actions = []
+        self._action_sequence = {}  # task_id -> ordered list of required actions
 
     # ─── RESET ───────────────────────────────────────────
     def reset(self, task_id: str = "easy") -> PipelineObservation:
@@ -28,11 +31,12 @@ class PipelineEnvironment(Environment):
         self.episode_id       = str(uuid4())
         self.step_count       = 0
         self.is_done          = False
+        self.action_history   = []
+        self.required_actions = list(scenario["required_actions"])
         self.max_steps        = scenario["max_steps"]
         self.task_description = scenario["task_description"]
         self.scenario_name    = scenario["name"]
         self.stages           = copy.deepcopy(scenario["stages"])
-        self.required_actions = list(scenario["required_actions"])
         self.health_score     = compute_health_score(self.stages)
 
         return self._make_observation()
@@ -44,6 +48,9 @@ class PipelineEnvironment(Environment):
 
         self.step_count += 1
         prev_health = self.health_score
+
+        # Record action
+        self.action_history.append(action.action.value)
 
         # Apply action
         self._apply_action(action)
@@ -84,6 +91,11 @@ class PipelineEnvironment(Environment):
 
         elif a == RepairAction.fix_docker_config:
             self._heal_stage("build")
+            # Unskip test — once Docker build is fixed, test can run and pass
+            for s in self.stages:
+                if s["name"] == "test" and s["status"] == "skipped":
+                    s["status"] = "passing"
+                    s["error"] = None
 
         elif a == RepairAction.set_env_var:
             self._heal_stage("deploy")
@@ -152,7 +164,7 @@ class PipelineEnvironment(Environment):
             "done":        self.is_done,
             "info": {
                 "health_score": self.health_score,
-                "grader_score": grade_task(self.current_task_id, self.health_score),
+                "grader_score": grade_task(self.current_task_id, self.health_score, self.action_history),
                 "step_count":   self.step_count,
             }
         }

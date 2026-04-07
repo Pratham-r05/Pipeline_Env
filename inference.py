@@ -4,11 +4,14 @@ import json
 import requests
 from openai import OpenAI
 
-# ── Mandatory env vars ────────────────────────────────
-API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
-MODEL_NAME   = os.getenv("MODEL_NAME",   "meta-llama/Llama-3.1-8B-Instruct")
-HF_TOKEN     = os.getenv("HF_TOKEN")
-BASE_URL = os.getenv("BASE_URL", "https://endraode-pipeline-env.hf.space")
+# ── Mandatory env vars (per spec) ─────────────────────
+API_KEY      = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
+API_BASE_URL = os.getenv("API_BASE_URL") or "https://router.huggingface.co/v1"
+MODEL_NAME   = os.getenv("MODEL_NAME") or "meta-llama/Llama-3.1-8B-Instruct"
+BASE_URL     = os.getenv("BASE_URL") or "http://localhost:7860"
+
+BENCHMARK    = "pipeline-env"
+TASKS        = ["easy", "medium", "hard"]
 
 
 # ── MANDATORY stdout format ───────────────────────────
@@ -16,12 +19,13 @@ def log_start(task, env, model):
     print(f"[START] task={task} env={env} model={model}", flush=True)
 
 def log_step(step, action, reward, done, error=None):
-    err = error if error else "null"
-    print(f"[STEP] step={step} action={action} reward={reward:.2f} done={str(done).lower()} error={err}", flush=True)
+    error_val = error if error else "null"
+    done_val  = str(done).lower()
+    print(f"[STEP] step={step} action={action} reward={reward:.2f} done={done_val} error={error_val}", flush=True)
 
-def log_end(success, steps, rewards):
+def log_end(success, steps, score, rewards):
     r_str = ",".join(f"{r:.2f}" for r in rewards)
-    print(f"[END] success={str(success).lower()} steps={steps} rewards={r_str}", flush=True)
+    print(f"[END] success={str(success).lower()} steps={steps} score={score:.2f} rewards={r_str}", flush=True)
 
 
 # ── LLM Agent ─────────────────────────────────────────
@@ -51,7 +55,6 @@ Choose the single best action to fix the pipeline."""
             temperature = 0,
         )
         content = resp.choices[0].message.content.strip()
-        # Strip markdown fences if present
         content = content.replace("```json", "").replace("```", "").strip()
         return json.loads(content)
     except Exception as e:
@@ -61,12 +64,12 @@ Choose the single best action to fix the pipeline."""
 
 # ── Main benchmark loop ───────────────────────────────
 def run_benchmark():
-    client = OpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN or "dummy")
-    tasks  = ["easy", "medium", "hard"]
+    client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY or "dummy")
 
-    for task_id in tasks:
-        log_start(task=task_id, env="pipeline-env", model=MODEL_NAME)
+    for task_id in TASKS:
+        log_start(task=task_id, env=BENCHMARK, model=MODEL_NAME)
         rewards, steps_taken, success = [], 0, False
+        final_score = 0.0
 
         try:
             # Reset
@@ -77,7 +80,6 @@ def run_benchmark():
             max_steps = obs.get("max_steps", 12)
 
             for step in range(1, max_steps + 1):
-                # Fallback action if LLM fails
                 try:
                     action_dict = get_agent_action(client, obs)
                 except Exception:
@@ -87,9 +89,11 @@ def run_benchmark():
                 result = sr.json()
 
                 reward = result.get("reward") or 0.0
-                done   = result.get("done",  False)
+                done   = result.get("done", False)
                 obs    = result.get("observation", obs)
-                err    = result.get("info", {}).get("error")
+                info   = result.get("info", {})
+                err    = info.get("error")
+                final_score = info.get("grader_score", final_score)
 
                 rewards.append(reward)
                 steps_taken = step
@@ -97,13 +101,13 @@ def run_benchmark():
                          reward=reward, done=done, error=err)
 
                 if done:
-                    success = obs.get("health_score", 0) >= 0.99
+                    success = final_score >= 0.99
                     break
 
         except Exception as e:
             print(f"[DEBUG] Task {task_id} error: {e}", flush=True)
 
-        log_end(success=success, steps=steps_taken, rewards=rewards)
+        log_end(success=success, steps=steps_taken, score=final_score, rewards=rewards)
 
 if __name__ == "__main__":
     run_benchmark()

@@ -1,6 +1,6 @@
 [build-system]
 requires = ["setuptools>=61.0"]
-build-backend = "setuptools.backends.legacy:build"
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "pipeline-env"
@@ -15,6 +15,9 @@ dependencies = [
     "openai",
     "requests",
 ]
+
+[project.scripts]
+server = "server.app:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

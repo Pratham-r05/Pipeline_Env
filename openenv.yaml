@@ -1,18 +1,3 @@
----
-title: Pipeline Env
-emoji: 🔧
-colorFrom: purple
-colorTo: cyan
-sdk: docker
-app_port: 7860
-tags:
-  - openenv
-  - ci-cd
-  - devops
-  - rl-environment
-
----
-
 name: "pipeline-env"
 version: "1.0.0"
 description: "RL environment for training agents to diagnose and repair broken CI/CD pipelines"
@@ -39,7 +24,7 @@ tasks:
     expected_score: 1.0
 
   - id: "hard"
-    description: "Diagnose and fix cascading multi-stage pipeline failure"
+    description: "Diagnose and fix cascading multi-stage pipeline failure in correct order"
     difficulty: "hard"
     max_steps: 12
     expected_score: 1.0
