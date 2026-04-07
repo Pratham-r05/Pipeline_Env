@@ -1,22 +1,29 @@
 # ui.py — Visual agent dashboard for PipelineEnv
 # Mounts a Gradio app at /ui on top of the FastAPI server.
-# Runs fully local — talks directly to the in-process PipelineEnvironment.
+# Uses a built-in deterministic agent — no external LLM required.
 
 import json
 import os
 import time
 import gradio as gr
-from openai import OpenAI
 
 from server.pipeline_environment import PipelineEnvironment
 from models import PipelineAction, RepairAction
 
 # ── Config ─────────────────────────────────────────────
+USE_LLM = os.getenv("USE_LLM", "").lower() == "true"
 API_BASE_URL = os.getenv("API_BASE_URL") or "https://router.huggingface.co/v1"
 MODEL_NAME   = os.getenv("MODEL_NAME") or "meta-llama/Llama-3.1-8B-Instruct"
 API_KEY      = os.getenv("HF_TOKEN") or os.getenv("API_KEY") or "dummy"
 
 env = PipelineEnvironment()
+
+# Deterministic action plans for each task
+ACTION_PLANS = {
+    "easy":   ["fix_test"],
+    "medium": ["fix_docker_config", "set_env_var"],
+    "hard":   ["rollback_commit", "add_dependency", "fix_yaml_config"],
+}
 
 ACTION_ICONS = {
     "fix_test": "\U0001f9ea",
@@ -28,6 +35,7 @@ ACTION_ICONS = {
     "add_dependency": "\U0001f4e6",
     "no_op": "\U0001f4a4",
 }
+
 
 # ── Helpers ────────────────────────────────────────────
 
@@ -55,34 +63,17 @@ def _render_health(score):
     )
 
 
-def _agent_action(client, obs):
-    prompt = f"""You are a DevOps engineer fixing a broken CI/CD pipeline.
-
-Task: {obs.get("task_description", "")}
-Health: {obs.get("health_score", 0):.2f}/1.0
-Errors: {obs.get("error_messages", [])}
-Available: {obs.get("available_actions", [])}
-
-Reply JSON ONLY: {{"action":"fix_test","target":null,"value":null}}"""
-
-    try:
-        resp = client.chat.completions.create(
-            model=MODEL_NAME,
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=100,
-            temperature=0,
-        )
-        content = resp.choices[0].message.content.strip()
-        content = content.replace("```json", "").replace("```", "").strip()
-        return json.loads(content)
-    except Exception:
-        return {"action": "no_op", "target": None, "value": None}
+def _deterministic_action(task_id, step_num):
+    """Built-in agent that knows the correct action sequence."""
+    plan = ACTION_PLANS.get(task_id, [])
+    if step_num - 1 < len(plan):
+        return {"action": plan[step_num - 1], "target": None, "value": None}
+    return {"action": "no_op", "target": None, "value": None}
 
 
 # ── Yielding generator ──────────────────────────────────
 
 def run_task(task_id):
-    client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
     obs = env.reset(task_id).model_dump()
     max_s = obs["max_steps"]
 
@@ -103,14 +94,15 @@ def run_task(task_id):
         te = "<br>".join(term_lines)
         term_box = f'<div style="font-family:JetBrains Mono,Fira Code,monospace;font-size:13px;line-height:1.6;color:#c9d1d9;background:#0d1117;padding:12px;border-radius:6px;white-space:pre-wrap;max-height:340px;overflow-y:auto">{te}</div>'
         al = "<br>".join(f'<span style="color:#58a6ff;font-family:monospace;font-size:12px">{a}</span>' for a in action_log) if action_log else '<span style="color:#8b949e;font-size:12px">Waiting\u2026</span>'
-        sm = f'<span style="color:#8b949e;font-size:12px">Running\u2026 step {len(term_lines)}/{max_s} | health {obs["health_score"]:.2f} | score {current_score:.3f}</span>'
+        sm = f'<span style="color:#8b949e;font-size:12px">Running\u2026 step {len(action_log)}/{max_s} | health {obs["health_score"]:.2f} | score {current_score:.3f}</span>'
         return _render_env(obs, len(action_log), max_s), _render_health(obs["health_score"]), term_box, al, sm
 
     yield _snapshot()
     time.sleep(0.4)
 
     for step_num in range(1, max_s + 1):
-        ad = _agent_action(client, obs)
+        # Use deterministic agent
+        ad = _deterministic_action(task_id, step_num)
         aname = ad.get("action", "no_op")
         icon = ACTION_ICONS.get(aname, "\u2699")
         action_log.append(f"{icon} Step {step_num}: {aname}")
@@ -149,7 +141,7 @@ def run_task(task_id):
     st = "\u2705 PIPELINE HEALED" if success else "\u274c FAILED TO HEAL"
     term_lines.append(f'<span style="color:{sc};font-weight:700;font-size:14px">{st}</span>')
     term_lines.append(f'    Steps: {len(action_log)} | Total reward: {total_r:+.3f} | Score: {current_score:.3f}')
-    term_lines.append(f'    Model: {MODEL_NAME.split("/")[-1]}')
+    term_lines.append(f'    Agent: Deterministic (built-in)')
 
     yield _snapshot()
 
