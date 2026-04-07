@@ -16,7 +16,7 @@ tags:
 
 > An OpenEnv-compliant Reinforcement Learning environment where an AI agent diagnoses and repairs broken CI/CD pipelines — a real-world DevOps self-healing scenario.
 
-**Live Demo:** [https://endraode-pipeline-env.hf.space/ui](https://endraode-pipeline-env.hf.space/ui)
+**Live Demo:** [https://huggingface.co/spaces/Endraode/pipeline-env](https://huggingface.co/spaces/Endraode/pipeline-env)
 
 ---
 
@@ -62,7 +62,7 @@ pip install -r requirements.txt
 uvicorn server.app:app --host 0.0.0.0 --port 7860
 
 # Open dashboard
-open http://localhost:7860/ui
+open http://localhost:7860
 ```
 
 The environment starts immediately. No dataset downloads, no database setup.
@@ -96,7 +96,7 @@ The environment starts immediately. No dataset downloads, no database setup.
 │  └────────────────────────────────────────────────┘ │
 │                                                     │
 │  ┌────────────────────────────────────────────────┐ │
-│  │  Gradio UI (/ui) — deterministic agent demo    │ │
+│  │  Gradio UI (root) — deterministic agent demo  │ │
 │  │  Pipeline stages | Health bar | Terminal       │ │
 │  └────────────────────────────────────────────────┘ │
 └─────────────────────────────────────────────────────┘
@@ -211,7 +211,7 @@ All endpoints are OpenEnv-compliant and tested via `openenv validate`, `docker b
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `GET` | `/` | Health check, version info |
+| `GET` | `/` | Gradio UI dashboard (interactive demo) |
 | `GET` | `/health` | Server health status |
 | `POST` | `/reset` | Start new episode `{"task_id": "easy"}` |
 | `POST` | `/step` | Take a repair action `{"action": "fix_test"}` |

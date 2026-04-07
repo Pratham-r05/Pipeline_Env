@@ -32,11 +32,6 @@ class StepRequest(BaseModel):
 
 
 # ─── ENDPOINTS ───────────────────────────────────────
-@app.get("/")
-def root():
-    return {"status": "ok", "env": "pipeline-env", "version": "1.0.0"}
-
-
 @app.get("/health")
 def health():
     return {"status": "healthy"}
@@ -71,7 +66,7 @@ def state():
 # ─── GRADIO MOUNT (only on HF Spaces) ──────────────────
 if os.getenv("SPACE_ID"):
     from ui import demo as _demo
-    app = gr.mount_gradio_app(app, _demo, path="/ui")
+    app = gr.mount_gradio_app(app, _demo, path="/")
 
 
 def main():
