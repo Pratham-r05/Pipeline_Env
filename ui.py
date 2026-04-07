@@ -9,7 +9,7 @@ import requests
 import gradio as gr
 from openai import OpenAI
 
-BASE_URL    = os.getenv("BASE_URL", "http://localhost:7860")
+BASE_URL = os.getenv("BASE_URL", "https://endraode-pipeline-env.hf.space")
 API_BASE    = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
 MODEL_NAME  = os.getenv("MODEL_NAME", "meta-llama/Llama-3.1-8B-Instruct")
 HF_TOKEN    = os.getenv("HF_TOKEN", "dummy")
@@ -235,7 +235,7 @@ def run_agent(task_id: str):
 # ── BUILD GRADIO UI ────────────────────────────────────────────────────────────
 with gr.Blocks(title="PipelineEnv — Agent Dashboard") as demo:
     gr.HTML(f"<style>{CSS}</style>")
-    
+
     gr.HTML("""
     <div style="text-align:center;padding:24px 0 8px">
         <div style="font-size:28px;font-weight:700;letter-spacing:-1px">🔧 PipelineEnv</div>
