@@ -80,6 +80,7 @@ class PipelineEnvironment(Environment):
 
         if a == RepairAction.fix_test:
             self._heal_stage("test")
+            self._heal_stage("deploy")
 
         elif a == RepairAction.fix_docker_config:
             self._heal_stage("build")
