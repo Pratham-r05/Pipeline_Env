@@ -1,4 +1,7 @@
 # server/app.py — FastAPI server with all required endpoints
+import gradio as gr
+from ui import demo
+
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -58,3 +61,5 @@ def step(req: StepRequest):
 @app.get("/state")
 def state():
     return env.state.model_dump()
+
+app = gr.mount_gradio_app(app, demo, path="/ui")
