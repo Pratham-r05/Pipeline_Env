@@ -38,8 +38,9 @@ def health():
 
 
 @app.post("/reset")
-def reset(req: ResetRequest):
-    obs = env.reset(task_id=req.task_id)
+def reset(req: Optional[ResetRequest] = None):
+    task_id = req.task_id if req else "easy"
+    obs = env.reset(task_id=task_id)
     return obs.model_dump()
 
 
