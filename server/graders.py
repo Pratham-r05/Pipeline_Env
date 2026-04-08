@@ -16,10 +16,10 @@ def compute_health_score(stages: list) -> float:
     """
     Deterministic grader — same pipeline state always → same score.
     Weighted by stage importance: deploy > test > build.
-    Returns float in [0.0, 1.0]
+    Returns float strictly in (0.0, 1.0)
     """
     if not stages:
-        return 0.0
+        return 0.001
 
     total_weight  = 0.0
     passing_weight = 0.0
@@ -31,9 +31,11 @@ def compute_health_score(stages: list) -> float:
             passing_weight += w
 
     if total_weight == 0:
-        return 0.0
+        return 0.001
 
-    return round(passing_weight / total_weight, 3)
+    score = round(passing_weight / total_weight, 3)
+    # Clamp to strictly (0, 1) range
+    return max(0.001, min(0.999, score))
 
 
 def _check_action_order(required: list, taken: list) -> bool:
@@ -48,7 +50,7 @@ def _check_action_order(required: list, taken: list) -> bool:
 def grade_task(task_id: str, final_health: float, action_history: list = None) -> float:
     """
     Final grader for each task.
-    Returns score in [0.0, 1.0].
+    Returns score strictly in (0.0, 1.0).
     Full score only if pipeline fully healed.
     For "hard" task, actions must be in correct order.
     """
@@ -58,6 +60,9 @@ def grade_task(task_id: str, final_health: float, action_history: list = None) -
         # For hard task, also verify action ordering
         order = ACTION_ORDER.get(task_id)
         if order and not _check_action_order(order, action_history):
-            return round(final_health * 0.7, 3)  # penalty for wrong order
-        return 1.0
-    return round(final_health, 3)
+            score = round(final_health * 0.7, 3)
+            return max(0.001, min(0.999, score))  # penalty for wrong order
+        return 0.999  # Full success, but strictly less than 1.0
+
+    # Clamp to strictly (0, 1) range
+    return max(0.001, min(0.999, round(final_health, 3)))
