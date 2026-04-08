@@ -24,8 +24,10 @@ def log_step(step, action, reward, done, error=None):
     print(f"[STEP] step={step} action={action} reward={reward:.2f} done={done_val} error={error_val}", flush=True)
 
 def log_end(success, steps, score, rewards):
+    # Clamp score to strictly (0, 1) and ensure pure Python float
+    score = float(max(0.001, min(0.999, score)))
     r_str = ",".join(f"{r:.2f}" for r in rewards)
-    print(f"[END] success={str(success).lower()} steps={steps} score={score:.2f} rewards={r_str}", flush=True)
+    print(f"[END] success={str(success).lower()} steps={steps} score={score:.4f} rewards={r_str}", flush=True)
 
 
 # ── LLM Agent ─────────────────────────────────────────
@@ -69,7 +71,7 @@ def run_benchmark():
     for task_id in TASKS:
         log_start(task=task_id, env=BENCHMARK, model=MODEL_NAME)
         rewards, steps_taken, success = [], 0, False
-        final_score = 0.0
+        final_score = 0.001
 
         try:
             # Reset
@@ -93,7 +95,8 @@ def run_benchmark():
                 obs    = result.get("observation", obs)
                 info   = result.get("info", {})
                 err    = info.get("error")
-                final_score = info.get("grader_score", final_score)
+                raw_score   = info.get("grader_score", final_score)
+                final_score = float(max(0.001, min(0.999, raw_score)))
 
                 rewards.append(reward)
                 steps_taken = step
