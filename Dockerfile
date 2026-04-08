@@ -2,7 +2,7 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Upgrade pip and setuptools first
+# Cache bust: 2026-04-08-v3-force-rebuild
 RUN pip install --upgrade pip setuptools wheel
 
 # Install dependencies
