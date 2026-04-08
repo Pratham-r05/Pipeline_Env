@@ -62,7 +62,7 @@ def grade_task(task_id: str, final_health: float, action_history: list = None) -
         if order and not _check_action_order(order, action_history):
             score = round(final_health * 0.7, 3)
             return max(0.001, min(0.999, score))  # penalty for wrong order
-        return 0.999  # Full success, but strictly less than 1.0
+        return 0.999  # Full success
 
-    # Clamp to strictly (0, 1) range
+    # For partial health, still clamp to strictly (0, 1) range
     return max(0.001, min(0.999, round(final_health, 3)))
